@@ -13,9 +13,7 @@
         color: #182335;
       }
 
-      * {
-        box-sizing: border-box;
-      }
+      * { box-sizing: border-box; }
 
       body {
         margin: 0;
@@ -47,9 +45,7 @@
       }
 
       p,
-      h1 {
-        margin: 0;
-      }
+      h1 { margin: 0; }
 
       .eyebrow {
         color: #0d6f93;
@@ -63,18 +59,17 @@
         letter-spacing: 0;
       }
 
-      section {
-        padding: 16px;
-      }
+      section { padding: 16px; }
 
       #reader {
         overflow: hidden;
-        min-height: 320px;
+        min-height: 330px;
         border-radius: 14px;
         background: #111827;
       }
 
       #reader video {
+        width: 100%;
         border-radius: 14px;
       }
 
@@ -85,9 +80,8 @@
         font-weight: 700;
       }
 
-      .message.error {
-        color: #b42318;
-      }
+      .message.error { color: #b42318; }
+      .message.ok { color: #136f43; }
 
       .actions {
         display: grid;
@@ -110,9 +104,20 @@
         text-decoration: none;
       }
 
+      button:disabled {
+        opacity: 0.62;
+      }
+
       .secondary {
         background: #fffaf0;
         color: #0b4e68;
+      }
+
+      .hint {
+        margin-top: 10px;
+        color: #5d6676;
+        font-size: 14px;
+        line-height: 1.55;
       }
     </style>
   </head>
@@ -125,9 +130,11 @@
 
       <section>
         <div id="reader"></div>
-        <p id="message" class="message">カメラを起動してください。</p>
+        <p id="message" class="message">ライブカメラを起動してください。</p>
+        <p id="hint" class="hint">QRコードとJANバーコードを読み取れます。iPhoneとAndroidの両方で、背面カメラを優先して起動します。</p>
         <div class="actions">
           <button id="startButton" type="button">ライブカメラを起動</button>
+          <button id="retryButton" class="secondary" type="button">別のカメラで再試行</button>
           <button id="stopButton" class="secondary" type="button">停止</button>
           <a id="backLink" class="secondary" href="#">戻る</a>
         </div>
@@ -140,26 +147,117 @@
         var returnUrl = params.get('return_url') || '';
         var mode = params.get('mode') || 'search';
         var message = document.getElementById('message');
+        var hint = document.getElementById('hint');
         var startButton = document.getElementById('startButton');
+        var retryButton = document.getElementById('retryButton');
         var stopButton = document.getElementById('stopButton');
         var backLink = document.getElementById('backLink');
         var scanner = null;
         var running = false;
+        var cameraIndex = 0;
+        var lastCameraList = [];
+        var starting = false;
 
         backLink.href = returnUrl || 'javascript:history.back()';
-        startButton.addEventListener('click', start);
+        startButton.addEventListener('click', function() {
+          cameraIndex = 0;
+          start();
+        });
+        retryButton.addEventListener('click', function() {
+          cameraIndex += 1;
+          start();
+        });
         stopButton.addEventListener('click', stop);
 
-        function start() {
-          if (!window.Html5Qrcode) {
-            setMessage('QRライブラリを読み込めませんでした。通信状態を確認してください。', true);
-            return;
+        setHint();
+
+        async function start() {
+          if (starting) return;
+          starting = true;
+          startButton.disabled = true;
+          retryButton.disabled = true;
+
+          try {
+            if (!window.isSecureContext) {
+              showRecoverableMessage('安全な通信ではないため、カメラを起動できません。HTTPSのURLで開いてください。');
+              return;
+            }
+            if (!window.Html5Qrcode) {
+              showRecoverableMessage('QR読み取り部品を読み込めませんでした。通信状態を確認して、ページを更新してください。');
+              return;
+            }
+
+            await stopScanner();
+            setMessage('ライブカメラを起動しています...', false, false);
+
+            var candidates = await buildCameraCandidates();
+            var started = false;
+            for (var i = 0; i < candidates.length; i += 1) {
+              var candidate = candidates[(cameraIndex + i) % candidates.length];
+              try {
+                await startWithCandidate(candidate);
+                cameraIndex = (cameraIndex + i) % candidates.length;
+                started = true;
+                break;
+              } catch (error) {
+                await stopScanner();
+              }
+            }
+
+            if (!started) {
+              showRecoverableMessage(buildCameraHelpText());
+            }
+          } finally {
+            starting = false;
+            startButton.disabled = false;
+            retryButton.disabled = false;
           }
-          if (running) return;
-          setMessage('ライブカメラを起動しています...', false);
-          scanner = new Html5Qrcode('reader');
-          scanner.start(
-            { facingMode: 'environment' },
+        }
+
+        async function buildCameraCandidates() {
+          var candidates = [];
+          lastCameraList = [];
+
+          try {
+            lastCameraList = await Html5Qrcode.getCameras();
+          } catch (error) {
+            lastCameraList = [];
+          }
+
+          var rear = lastCameraList.filter(function(camera) {
+            return /back|rear|environment|外|背|后|後/i.test(String(camera.label || ''));
+          });
+          var frontOrUnknown = lastCameraList.filter(function(camera) {
+            return rear.indexOf(camera) === -1;
+          });
+
+          rear.concat(frontOrUnknown).forEach(function(camera) {
+            if (camera && camera.id) {
+              candidates.push(camera.id);
+            }
+          });
+
+          candidates.push({ facingMode: { exact: 'environment' } });
+          candidates.push({ facingMode: 'environment' });
+          candidates.push({ facingMode: { ideal: 'environment' } });
+
+          return uniqueCandidates(candidates);
+        }
+
+        function uniqueCandidates(candidates) {
+          var seen = {};
+          return candidates.filter(function(candidate) {
+            var key = typeof candidate === 'string' ? candidate : JSON.stringify(candidate);
+            if (seen[key]) return false;
+            seen[key] = true;
+            return true;
+          });
+        }
+
+        async function startWithCandidate(candidate) {
+          scanner = new Html5Qrcode('reader', buildScannerOptions());
+          await scanner.start(
+            candidate,
             {
               fps: 10,
               qrbox: function(width, height) {
@@ -169,36 +267,67 @@
               },
               aspectRatio: 1.333334,
               rememberLastUsedCamera: true,
+              experimentalFeatures: {
+                useBarCodeDetectorIfSupported: true,
+              },
             },
             onScanSuccess,
             function() {}
-          ).then(function() {
-            running = true;
-            setMessage('QRコードをカメラに映してください。', false);
-          }).catch(function(error) {
-            running = false;
-            setMessage(buildErrorMessage(error), true);
-          });
+          );
+          running = true;
+          setMessage('QRコードをカメラに映してください。', false, true);
         }
 
-        function stop() {
-          if (!scanner || !running) return;
-          scanner.stop().then(function() {
-            running = false;
-            return scanner.clear();
-          }).then(function() {
-            setMessage('停止しました。', false);
-          }).catch(function() {
-            running = false;
+        function buildScannerOptions() {
+          var supported = window.Html5QrcodeSupportedFormats || {};
+          var formats = [
+            supported.QR_CODE,
+            supported.EAN_13,
+            supported.EAN_8,
+            supported.CODE_128,
+            supported.CODE_39,
+            supported.UPC_A,
+            supported.UPC_E,
+            supported.ITF,
+          ].filter(function(format) {
+            return format !== undefined && format !== null;
           });
+
+          if (!formats.length) {
+            return { verbose: false };
+          }
+          return {
+            verbose: false,
+            formatsToSupport: formats,
+          };
+        }
+
+        async function stop() {
+          await stopScanner();
+          setMessage('停止しました。', false, false);
+        }
+
+        async function stopScanner() {
+          if (!scanner) return;
+          try {
+            if (running) {
+              await scanner.stop();
+            }
+          } catch (error) {}
+          try {
+            await scanner.clear();
+          } catch (error) {}
+          scanner = null;
+          running = false;
         }
 
         function onScanSuccess(decodedText) {
           if (!decodedText) return;
-          setMessage('読み取りました。戻っています...', false);
+          setMessage('読み取りました。戻っています...', false, true);
           var target = buildReturnUrl(decodedText);
-          stop();
-          window.location.href = target;
+          stopScanner().finally(function() {
+            window.location.href = target;
+          });
         }
 
         function buildReturnUrl(value) {
@@ -226,19 +355,40 @@
           return text;
         }
 
-        function buildErrorMessage(error) {
-          var name = error && (error.name || error.message) ? String(error.name || error.message) : 'unknown';
-          return [
-            'ライブカメラを起動できませんでした。',
-            'エラー: ' + name,
-            '安全な通信: ' + (window.isSecureContext ? 'OK' : 'NG'),
-            'ブラウザ: ' + navigator.userAgent,
-          ].join('\n');
+        function buildCameraHelpText() {
+          var isiPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+          var isAndroid = /Android/i.test(navigator.userAgent);
+          if (isiPhone) {
+            return 'ライブカメラを起動できませんでした。SafariまたはChromeのアドレスバー左側の設定から、このサイトのカメラを「許可」にして、ページを更新してください。';
+          }
+          if (isAndroid) {
+            return 'ライブカメラを起動できませんでした。Chromeのサイト設定でカメラを「許可」にして、ページを更新してください。';
+          }
+          return 'ライブカメラを起動できませんでした。ブラウザのサイト設定でカメラを許可し、ページを更新してください。';
         }
 
-        function setMessage(text, isError) {
+        function setHint() {
+          var isiPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+          var isAndroid = /Android/i.test(navigator.userAgent);
+          if (isiPhone) {
+            hint.textContent = 'iPhoneではSafariまたはChromeで開き、カメラ許可を求められたら「許可」を押してください。';
+            return;
+          }
+          if (isAndroid) {
+            hint.textContent = 'AndroidではChromeで開き、カメラ許可を求められたら「許可」を押してください。';
+            return;
+          }
+          hint.textContent = '背面カメラを優先して起動します。';
+        }
+
+        function showRecoverableMessage(text) {
+          setMessage(text, true, false);
+        }
+
+        function setMessage(text, isError, isOk) {
           message.textContent = text || '';
           message.classList.toggle('error', Boolean(isError));
+          message.classList.toggle('ok', Boolean(isOk));
         }
       })();
     </script>
