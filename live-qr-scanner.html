@@ -200,7 +200,11 @@
         var lastCameraList = [];
         var starting = false;
 
-        backLink.href = backUrl || returnUrl || 'javascript:history.back()';
+        backLink.href = buildBackUrl();
+        backLink.addEventListener('click', function(event) {
+          event.preventDefault();
+          window.location.href = buildBackUrl();
+        });
         startButton.addEventListener('click', function() {
           cameraIndex = 0;
           start();
@@ -388,6 +392,23 @@
             return base + (base.indexOf('?') === -1 ? '?' : '&') + 'qr=' + encodeURIComponent(text);
           }
           return base + (base.indexOf('?') === -1 ? '?' : '&') + 'keyword=' + encodeURIComponent(resolveSearchKeyword(text));
+        }
+
+        function buildBackUrl() {
+          if (backUrl) {
+            return backUrl;
+          }
+          if (returnUrl) {
+            try {
+              var url = new URL(returnUrl);
+              url.search = '?page=dashboard';
+              url.hash = '';
+              return url.toString();
+            } catch (error) {
+              return returnUrl;
+            }
+          }
+          return './';
         }
 
         function resolveSearchKeyword(value) {
