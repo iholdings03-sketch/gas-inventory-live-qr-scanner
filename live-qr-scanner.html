@@ -146,6 +146,7 @@
         var params = new URLSearchParams(window.location.search);
         var returnUrl = params.get('return_url') || '';
         var mode = params.get('mode') || 'search';
+        var autoStart = params.get('autostart') === '1';
         var message = document.getElementById('message');
         var hint = document.getElementById('hint');
         var startButton = document.getElementById('startButton');
@@ -170,6 +171,9 @@
         stopButton.addEventListener('click', stop);
 
         setHint();
+        if (autoStart) {
+          window.setTimeout(start, 250);
+        }
 
         async function start() {
           if (starting) return;
