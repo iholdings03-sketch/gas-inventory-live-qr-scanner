@@ -187,6 +187,7 @@
         var backUrl = params.get('back_url') || '';
         var mode = params.get('mode') || 'search';
         var autoStart = params.get('autostart') === '1';
+        var defaultHomeUrl = 'https://script.google.com/macros/s/AKfycbwsW3rdObEU3rIkAAXYfxpCcd8y3AGQ7LWVoq_njARQ/dev?page=dashboard';
         var message = document.getElementById('message');
         var hint = document.getElementById('hint');
         var startButton = document.getElementById('startButton');
@@ -395,7 +396,7 @@
         }
 
         function buildBackUrl() {
-          if (backUrl) {
+          if (isUsableAppUrl(backUrl)) {
             return backUrl;
           }
           if (returnUrl) {
@@ -403,12 +404,24 @@
               var url = new URL(returnUrl);
               url.search = '?page=dashboard';
               url.hash = '';
-              return url.toString();
+              var dashboardUrl = url.toString();
+              if (isUsableAppUrl(dashboardUrl)) {
+                return dashboardUrl;
+              }
             } catch (error) {
-              return returnUrl;
+              if (isUsableAppUrl(returnUrl)) {
+                return returnUrl;
+              }
             }
           }
-          return './';
+          return defaultHomeUrl;
+        }
+
+        function isUsableAppUrl(value) {
+          var text = String(value || '').trim();
+          if (!text) return false;
+          if (/github\.io\/gas-inventory-live-qr-scanner/i.test(text)) return false;
+          return /^https?:\/\//i.test(text);
         }
 
         function resolveSearchKeyword(value) {
