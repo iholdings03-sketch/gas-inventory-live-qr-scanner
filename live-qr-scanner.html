@@ -205,7 +205,7 @@
           event.preventDefault();
           var target = buildBackUrl();
           if (target && target !== '#') {
-            window.location.href = target;
+            navigateTo(target);
             return;
           }
           setMessage('戻り先が見つかりません。ダッシュボードから開き直してください。', true, false);
@@ -222,7 +222,7 @@
             showRecoverableMessage('JAN / SKU / 棚番を入力してください。');
             return;
           }
-          window.location.href = buildReturnUrl(value);
+          navigateTo(buildReturnUrl(value));
         });
 
         setHint();
@@ -383,8 +383,18 @@
           setMessage('読み取りました。戻っています...', false, true);
           var target = buildReturnUrl(decodedText);
           stopScanner().finally(function() {
-            window.location.href = target;
+            navigateTo(target);
           });
+        }
+
+        function navigateTo(target) {
+          try {
+            if (window.top && window.top !== window) {
+              window.top.location.href = target;
+              return;
+            }
+          } catch (error) {}
+          window.location.href = target;
         }
 
         function buildReturnUrl(value) {
@@ -440,7 +450,7 @@
         }
 
         function normalizeAppUrl(value) {
-          return String(value || '').replace(/\/dev(\?|#|$)/i, '/exec$1');
+          return String(value || '');
         }
 
         function isUsableAppUrl(value) {
