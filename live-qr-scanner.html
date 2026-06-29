@@ -187,7 +187,6 @@
         var backUrl = params.get('back_url') || '';
         var mode = params.get('mode') || 'search';
         var autoStart = params.get('autostart') === '1';
-        var defaultHomeUrl = 'https://script.google.com/macros/s/AKfycbwsW3rdObEU3rIkAAXYfxpCcd8y3AGQ7LWVoq_njARQ/dev?page=dashboard';
         var message = document.getElementById('message');
         var hint = document.getElementById('hint');
         var startButton = document.getElementById('startButton');
@@ -204,7 +203,12 @@
         backLink.href = buildBackUrl();
         backLink.addEventListener('click', function(event) {
           event.preventDefault();
-          window.location.href = buildBackUrl();
+          var target = buildBackUrl();
+          if (target && target !== '#') {
+            window.location.href = target;
+            return;
+          }
+          setMessage('戻り先が見つかりません。ダッシュボードから開き直してください。', true, false);
         });
         startButton.addEventListener('click', function() {
           cameraIndex = 0;
@@ -414,7 +418,25 @@
               }
             }
           }
-          return defaultHomeUrl;
+          var referrerDashboardUrl = buildDashboardUrlFromReferrer();
+          if (referrerDashboardUrl) {
+            return referrerDashboardUrl;
+          }
+          return '#';
+        }
+
+        function buildDashboardUrlFromReferrer() {
+          try {
+            var referrer = String(document.referrer || '').trim();
+            if (!referrer) return '';
+            var url = new URL(referrer);
+            url.search = '?page=dashboard';
+            url.hash = '';
+            var dashboardUrl = url.toString();
+            return isUsableAppUrl(dashboardUrl) ? dashboardUrl : '';
+          } catch (error) {
+            return '';
+          }
         }
 
         function isUsableAppUrl(value) {
