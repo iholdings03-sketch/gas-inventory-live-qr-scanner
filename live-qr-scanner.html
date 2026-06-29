@@ -401,20 +401,20 @@
 
         function buildBackUrl() {
           if (isUsableAppUrl(backUrl)) {
-            return backUrl;
+            return normalizeAppUrl(backUrl);
           }
           if (returnUrl) {
             try {
               var url = new URL(returnUrl);
               url.search = '?page=dashboard';
               url.hash = '';
-              var dashboardUrl = url.toString();
+              var dashboardUrl = normalizeAppUrl(url.toString());
               if (isUsableAppUrl(dashboardUrl)) {
                 return dashboardUrl;
               }
             } catch (error) {
               if (isUsableAppUrl(returnUrl)) {
-                return returnUrl;
+                return normalizeAppUrl(returnUrl);
               }
             }
           }
@@ -432,11 +432,15 @@
             var url = new URL(referrer);
             url.search = '?page=dashboard';
             url.hash = '';
-            var dashboardUrl = url.toString();
+            var dashboardUrl = normalizeAppUrl(url.toString());
             return isUsableAppUrl(dashboardUrl) ? dashboardUrl : '';
           } catch (error) {
             return '';
           }
+        }
+
+        function normalizeAppUrl(value) {
+          return String(value || '').replace(/\/dev(\?|#|$)/i, '/exec$1');
         }
 
         function isUsableAppUrl(value) {
