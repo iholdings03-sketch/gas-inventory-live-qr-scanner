@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>QRコード読み取り</title>
     <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
     <style>
       :root {
         color-scheme: light;
@@ -70,6 +71,8 @@
 
       #reader video {
         width: 100%;
+        min-height: 330px;
+        object-fit: cover;
         border-radius: 14px;
       }
 
@@ -162,7 +165,8 @@
       </header>
 
       <section>
-        <div id="reader"></div>
+        <div id="reader"><video id="previewVideo" autoplay muted playsinline></video></div>
+        <canvas id="scanCanvas" hidden></canvas>
         <p id="message" class="message">ライブカメラを起動してください。</p>
         <p id="hint" class="hint">QRコードとJANバーコードを読み取れます。iPhoneとAndroidの両方で、背面カメラを優先して起動します。</p>
         <div class="actions">
@@ -194,7 +198,15 @@
         var backLink = document.getElementById('backLink');
         var manualForm = document.getElementById('manualForm');
         var manualInput = document.getElementById('manualInput');
+        var previewVideo = document.getElementById('previewVideo');
+        var scanCanvas = document.getElementById('scanCanvas');
         var scanner = null;
+        var zxingReader = null;
+        var zxingStream = null;
+        var scanLoopId = 0;
+        var scanInProgress = false;
+        var scanAngles = [0, 90, -90, 180, 15, -15, 30, -30, 45, -45];
+        var scanAngleIndex = 0;
         var running = false;
         var cameraIndex = 0;
         var lastCameraList = [];
@@ -240,8 +252,8 @@
               showRecoverableMessage('安全な通信ではないため、カメラを起動できません。HTTPSのURLで開いてください。');
               return;
             }
-            if (!window.Html5Qrcode) {
-              showRecoverableMessage('QR読み取り部品を読み込めませんでした。通信状態を確認して、ページを更新してください。');
+            if (!window.ZXing && !window.Html5Qrcode) {
+              showRecoverableMessage('読み取り部品を読み込めませんでした。通信状態を確認して、ページを更新してください。');
               return;
             }
 
@@ -275,7 +287,7 @@
           var candidates = [];
           lastCameraList = [];
 
-          try {
+          if (window.Html5Qrcode) try {
             lastCameraList = await Html5Qrcode.getCameras();
           } catch (error) {
             lastCameraList = [];
@@ -312,6 +324,11 @@
         }
 
         async function startWithCandidate(candidate) {
+          if (window.ZXing) {
+            await startZxingWithCandidate(candidate);
+            return;
+          }
+          previewVideo.hidden = true;
           scanner = new Html5Qrcode('reader', buildScannerOptions());
           await scanner.start(
             candidate,
@@ -333,6 +350,117 @@
           );
           running = true;
           setMessage('QRコードをカメラに映してください。', false, true);
+        }
+
+        async function startZxingWithCandidate(candidate) {
+          previewVideo.hidden = false;
+          zxingReader = createZxingReader();
+          zxingStream = await navigator.mediaDevices.getUserMedia({
+            video: buildVideoConstraints(candidate),
+            audio: false,
+          });
+          previewVideo.srcObject = zxingStream;
+          await previewVideo.play();
+          running = true;
+          scanAngleIndex = 0;
+          setMessage('QRコード/JANバーコードをカメラに映してください。向きがずれていても読み取りを試します。', false, true);
+          scheduleZxingScan();
+        }
+
+        function createZxingReader() {
+          var hints = new Map();
+          var format = ZXing.BarcodeFormat || {};
+          var formats = [
+            format.QR_CODE,
+            format.EAN_13,
+            format.EAN_8,
+            format.UPC_A,
+            format.UPC_E,
+            format.CODE_128,
+            format.CODE_39,
+            format.CODE_93,
+            format.ITF,
+          ].filter(function(value) {
+            return value !== undefined && value !== null;
+          });
+          hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+          hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+          return new ZXing.BrowserMultiFormatReader(hints, 120);
+        }
+
+        function buildVideoConstraints(candidate) {
+          var base = {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          };
+          if (typeof candidate === 'string') {
+            base.deviceId = { exact: candidate };
+            return base;
+          }
+          if (candidate && typeof candidate === 'object') {
+            Object.keys(candidate).forEach(function(key) {
+              base[key] = candidate[key];
+            });
+            return base;
+          }
+          base.facingMode = { ideal: 'environment' };
+          return base;
+        }
+
+        function scheduleZxingScan() {
+          if (!running || !zxingReader) return;
+          scanLoopId = window.setTimeout(function() {
+            scanZxingFrame();
+            scheduleZxingScan();
+          }, 120);
+        }
+
+        function scanZxingFrame() {
+          if (scanInProgress || !running || !zxingReader || !previewVideo.videoWidth || !previewVideo.videoHeight) return;
+          scanInProgress = true;
+          try {
+            var angle = scanAngles[scanAngleIndex % scanAngles.length];
+            scanAngleIndex += 1;
+            var decoded = decodeVideoAtAngle(angle);
+            if (decoded) {
+              onScanSuccess(decoded);
+            }
+          } finally {
+            scanInProgress = false;
+          }
+        }
+
+        function decodeVideoAtAngle(angle) {
+          drawVideoToCanvas(angle);
+          try {
+            var source = new ZXing.HTMLCanvasElementLuminanceSource(scanCanvas);
+            var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source));
+            var result = zxingReader.decodeBitmap(bitmap);
+            return result && result.getText ? result.getText() : '';
+          } catch (error) {
+            return '';
+          }
+        }
+
+        function drawVideoToCanvas(angle) {
+          var sourceWidth = previewVideo.videoWidth;
+          var sourceHeight = previewVideo.videoHeight;
+          var scale = Math.min(1, 960 / Math.max(sourceWidth, sourceHeight));
+          var width = Math.max(1, Math.floor(sourceWidth * scale));
+          var height = Math.max(1, Math.floor(sourceHeight * scale));
+          var radians = angle * Math.PI / 180;
+          var sin = Math.abs(Math.sin(radians));
+          var cos = Math.abs(Math.cos(radians));
+          scanCanvas.width = Math.ceil(width * cos + height * sin);
+          scanCanvas.height = Math.ceil(width * sin + height * cos);
+          var context = scanCanvas.getContext('2d', { willReadFrequently: true });
+          context.fillStyle = '#fff';
+          context.fillRect(0, 0, scanCanvas.width, scanCanvas.height);
+          context.save();
+          context.translate(scanCanvas.width / 2, scanCanvas.height / 2);
+          context.rotate(radians);
+          context.drawImage(previewVideo, -width / 2, -height / 2, width, height);
+          context.restore();
         }
 
         function buildScannerOptions() {
@@ -365,7 +493,26 @@
         }
 
         async function stopScanner() {
-          if (!scanner) return;
+          window.clearTimeout(scanLoopId);
+          scanLoopId = 0;
+          scanInProgress = false;
+          if (zxingReader) {
+            try {
+              zxingReader.reset();
+            } catch (error) {}
+          }
+          zxingReader = null;
+          if (zxingStream) {
+            zxingStream.getTracks().forEach(function(track) {
+              track.stop();
+            });
+          }
+          zxingStream = null;
+          previewVideo.srcObject = null;
+          if (!scanner) {
+            running = false;
+            return;
+          }
           try {
             if (running) {
               await scanner.stop();
